@@ -585,7 +585,7 @@ final class NetworkService {
                 self?.listenForMessages()
             }
         }
-    }
+    } //test
     
     private static func ensureOK(_ resp: URLResponse) throws {
         guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
