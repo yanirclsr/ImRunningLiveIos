@@ -29,22 +29,9 @@
 		A74785522E4B8A730084F7D8 /* Im Running AppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Im Running AppUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
-/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		A74785662E4B8F4F0084F7D8 /* Exceptions for "Im Running App" folder in "Im Running App" target */ = {
-			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
-			membershipExceptions = (
-				"Im-Running-App-Info.plist",
-			);
-			target = A747853A2E4B8A720084F7D8 /* Im Running App */;
-		};
-/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
-
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A747853D2E4B8A720084F7D8 /* Im Running App */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			exceptions = (
-				A74785662E4B8F4F0084F7D8 /* Exceptions for "Im Running App" folder in "Im Running App" target */,
-			);
 			path = "Im Running App";
 			sourceTree = "<group>";
 		};
