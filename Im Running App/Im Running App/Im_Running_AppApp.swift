@@ -67,6 +67,12 @@ final class AppState: ObservableObject {
     
     @MainActor
     func startActivity() {
+        print("🚀 Starting activity...")
+        print("📍 Location status: \(location.authorizationStatus.rawValue)")
+        print("🌍 Current location: \(location.currentLocation?.coordinate.latitude ?? 0), \(location.currentLocation?.coordinate.longitude ?? 0)")
+        print("👤 Runner ID: \(runnerId)")
+        print("🏃 Activity ID: \(activityId ?? "act_7XcQdummy")")
+        
         // Accept both "Always" and "When In Use" permissions
         guard location.authorizationStatus == .authorizedAlways || location.authorizationStatus == .authorizedWhenInUse else {
             lastError = "Location permission is required."
@@ -81,12 +87,14 @@ final class AppState: ObservableObject {
         
         Task {
             do {
+                print("🌐 Making network request to start activity...")
                 let start = try await network.startActivity(
                     runnerId: runnerId,
                     activityId: activityId ?? "act_7XcQdummy", // Default for testing
                     latitude: currentLocation.coordinate.latitude,
                     longitude: currentLocation.coordinate.longitude
                 )
+                print("✅ Activity started successfully: \(start)")
                 self.activityURL = start.url
                 self.activityId = start.activityId
                 self.activityRunning = true
@@ -99,6 +107,12 @@ final class AppState: ObservableObject {
                 // Start 10s location loop
                 beginLocationLoop()
             } catch {
+                print("❌ Error starting activity: \(error)")
+                print("❌ Error details: \(error.localizedDescription)")
+                if let nsError = error as NSError? {
+                    print("❌ NSURLErrorDomain: \(nsError.domain)")
+                    print("❌ NSURLErrorCode: \(nsError.code)")
+                }
                 self.lastError = "Failed to start activity: \(error.localizedDescription)"
             }
         }
@@ -452,7 +466,7 @@ struct LocationPayload: Codable {
 }
 
 final class NetworkService {
-    private let baseHTTP = URL(string: "http://localhost:3000")!
+    private let baseHTTP = URL(string: "http://10.60.3.174:3000")! // Your Mac's IP address
     private var webSocket: URLSessionWebSocketTask?
     private let session: URLSession
     private let decoder = JSONDecoder()
@@ -470,6 +484,11 @@ final class NetworkService {
     // POST /api/runner/{runnerId}/activity/{activityId}/start
     func startActivity(runnerId: String, activityId: String, latitude: Double, longitude: Double) async throws -> StartResponse {
         let url = baseHTTP.appendingPathComponent("/api/runner/\(runnerId)/activity/\(activityId)/start")
+        print("🌐 NetworkService: Making request to URL: \(url)")
+        print("🌐 NetworkService: Base HTTP: \(baseHTTP)")
+        print("🌐 NetworkService: Runner ID: \(runnerId)")
+        print("🌐 NetworkService: Activity ID: \(activityId)")
+        
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -480,7 +499,10 @@ final class NetworkService {
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         
+        print("🌐 NetworkService: Request body: \(body)")
+        
         let (data, resp) = try await session.data(for: req)
+        print("🌐 NetworkService: Response received: \(resp)")
         try Self.ensureOK(resp)
         return try decoder.decode(StartResponse.self, from: data)
     }
@@ -517,17 +539,7 @@ final class NetworkService {
         try Self.ensureOK(resp)
     }
     
-    // Open cheer stream (placeholder for WebSocket setup)
-    func openCheerStream(activityId: String) {
-        // WebSocket setup would go here if using WebSockets
-        // For now, just a placeholder since we're using HTTP polling
-    }
-    
-    // Close cheer stream (placeholder for WebSocket cleanup)
-    func closeCheerStream() {
-        // WebSocket cleanup would go here if using WebSockets
-        // For now, just a placeholder since we're using HTTP polling
-    }
+
     
     // POST /api/runner/{runnerId}/activity/{activityId}/location
     func sendLocation(runnerId: String, activityId: String, payload: LocationPing) async throws {
@@ -544,7 +556,7 @@ final class NetworkService {
     // WebSocket for live cheers: ws://localhost:3000/api/activity/stream?activityId=...
     func openCheerStream(activityId: String) {
         closeCheerStream()
-        guard let wsURL = URL(string: "ws://localhost:3000/api/activity/stream?activityId=\(activityId)") else { return }
+        guard let wsURL = URL(string: "ws://10.60.3.174:3000/api/activity/stream?activityId=\(activityId)") else { return }
         webSocket = session.webSocketTask(with: wsURL)
         webSocket?.resume()
         listenForMessages()
