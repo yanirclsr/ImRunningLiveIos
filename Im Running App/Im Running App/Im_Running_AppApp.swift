@@ -27,7 +27,7 @@ final class AppState: ObservableObject {
     @Published var activityRunning = false
     @Published var activityURL: String? = nil
     @Published var activityId: String? = nil
-    @Published var runnerId: String = "usr_8pG7dummy"  // Default for testing
+    @Published var runnerId: String = "usr_yiopd15z"  // Real runner ID from your database
     @Published var lastError: String? = nil
     @Published var showLocationWarning = false
     @Published var showSetupForm = true
@@ -68,43 +68,49 @@ final class AppState: ObservableObject {
     @MainActor
     func startActivity() {
         print("🚀 Starting activity...")
-        print("📍 Location status: \(location.authorizationStatus.rawValue)")
-        print("🌍 Current location: \(location.currentLocation?.coordinate.latitude ?? 0), \(location.currentLocation?.coordinate.longitude ?? 0)")
         print("👤 Runner ID: \(runnerId)")
-        print("🏃 Activity ID: \(activityId ?? "act_7XcQdummy")")
+        print("🏃 Activity ID: \(activityId ?? "act_0arq557d")")
         
-        // Accept both "Always" and "When In Use" permissions
+        // Check location permissions first
         guard location.authorizationStatus == .authorizedAlways || location.authorizationStatus == .authorizedWhenInUse else {
-            lastError = "Location permission is required."
+            print("❌ Location permission required")
+            lastError = "Location permission is required. Please enable location access in Settings."
             showLocationWarning = true
             return
         }
         
+        // Check if we have current location
         guard let currentLocation = location.currentLocation else {
-            lastError = "Waiting for GPS signal..."
+            print("❌ Waiting for GPS signal...")
+            lastError = "Waiting for GPS signal... Please wait a moment and try again."
             return
         }
+        
+        print("📍 Using real location: \(currentLocation.coordinate.latitude), \(currentLocation.coordinate.longitude)")
+        print("📍 Location accuracy: \(currentLocation.horizontalAccuracy)m")
         
         Task {
             do {
                 print("🌐 Making network request to start activity...")
                 let start = try await network.startActivity(
                     runnerId: runnerId,
-                    activityId: activityId ?? "act_7XcQdummy", // Default for testing
+                    activityId: activityId ?? "act_0arq557d", // Real activity ID from your database
                     latitude: currentLocation.coordinate.latitude,
                     longitude: currentLocation.coordinate.longitude
                 )
-                print("✅ Activity started successfully: \(start)")
-                self.activityURL = start.url
-                self.activityId = start.activityId
-                self.activityRunning = true
-                // Start WebSocket for cheers (optional but recommended)
-                if let id = start.activityId {
-                    network.openCheerStream(activityId: id)
+                print("✅ Activity started successfully!")
+                print("✅ User: \(start.data.user.displayName)")
+                print("✅ Event: \(start.data.event.name)")
+                print("✅ Activity ID: \(start.data.activity.id)")
+                if let startLocation = start.data.startLocation {
+                    print("✅ Start Location: \(startLocation.lat), \(startLocation.lng)")
+                } else {
+                    print("✅ Start Location: Not provided")
                 }
-                // Start cheer polling every 30 seconds
-                beginCheerPolling()
-                // Start 10s location loop
+                self.lastError = nil
+                self.activityRunning = true
+                
+                // Start location tracking for the activity
                 beginLocationLoop()
             } catch {
                 print("❌ Error starting activity: \(error)")
@@ -234,6 +240,23 @@ struct MainView: View {
     @State private var runnerIdInput = ""
     @State private var activityIdInput = ""
     
+    private var locationStatusText: String {
+        switch app.location.authorizationStatus {
+        case .notDetermined:
+            return "Location permission not determined"
+        case .denied:
+            return "Location access denied"
+        case .restricted:
+            return "Location access restricted"
+        case .authorizedWhenInUse:
+            return "Location access granted (When In Use)"
+        case .authorizedAlways:
+            return "Location access granted (Always)"
+        @unknown default:
+            return "Unknown location status"
+        }
+    }
+    
     var body: some View {
         VStack(spacing: 20) {
             Text("I’m Running.Live")
@@ -244,12 +267,17 @@ struct MainView: View {
                 VStack(spacing: 8) {
                     Text("Location permission is required.")
                         .font(.subheadline)
+                    Button("Request Location Permission") {
+                        app.location.requestPermissionsOnLaunch()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    
                     Button("Open Settings") {
                         if let url = URL(string: UIApplication.openSettingsURLString) {
                             UIApplication.shared.open(url)
                         }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.bordered)
                     
                     // Debug info
                     VStack(spacing: 4) {
@@ -268,6 +296,43 @@ struct MainView: View {
                 .background(Color.yellow.opacity(0.2))
                 .cornerRadius(12)
             }
+            
+            // Location status info (always show)
+            VStack(spacing: 8) {
+                HStack {
+                    Image(systemName: app.location.authorizationStatus == .authorizedWhenInUse || app.location.authorizationStatus == .authorizedAlways ? "location.fill" : "location.slash")
+                        .foregroundColor(app.location.authorizationStatus == .authorizedWhenInUse || app.location.authorizationStatus == .authorizedAlways ? .green : .red)
+                    Text("Location Status")
+                        .font(.headline)
+                }
+                
+                Text(locationStatusText)
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                if let location = app.location.currentLocation {
+                    Text("📍 \(location.coordinate.latitude, specifier: "%.6f"), \(location.coordinate.longitude, specifier: "%.6f")")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                    Text("Accuracy: \(location.horizontalAccuracy, specifier: "%.1f")m")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("No GPS signal yet")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+                
+                Button("Refresh Location") {
+                    print("🔄 Manual location refresh requested")
+                    app.location.startUpdating()
+                }
+                .font(.caption)
+                .buttonStyle(.bordered)
+            }
+            .padding()
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(12)
             
             // Start/Stop button
             Button(app.activityRunning ? "Stop Activity" : "Start Activity") {
@@ -342,6 +407,11 @@ struct MainView: View {
             Spacer()
         }
         .padding()
+        .onAppear {
+            // Start location updates when view appears
+            print("🔄 MainView appeared - starting location updates")
+            app.location.startUpdating()
+        }
     }
 }
 
@@ -381,8 +451,14 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
     }
     
     func startUpdating() {
+        print("📍 Starting location updates...")
+        print("📍 Manager authorization status: \(manager.authorizationStatus.rawValue)")
+        print("📍 Desired accuracy: \(manager.desiredAccuracy)")
+        print("📍 Distance filter: \(manager.distanceFilter)")
+        
         // Start location updates for both permission levels
         manager.startUpdatingLocation()
+        print("📍 Location updates started")
         // Note: With "When In Use" permission, location updates only work while app is active
     }
     
@@ -405,7 +481,11 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
     }
     
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        print("📍 Location update received: \(locations.count) locations")
         if let last = locations.last {
+            print("📍 New location: \(last.coordinate.latitude), \(last.coordinate.longitude)")
+            print("📍 Accuracy: \(last.horizontalAccuracy)m")
+            print("📍 Timestamp: \(last.timestamp)")
             currentLocation = last
         }
     }
@@ -453,8 +533,81 @@ struct CheerMessage: Decodable {
 }
 
 struct StartResponse: Decodable {
-    let url: String
-    let activityId: String?
+    let success: Bool
+    let message: String
+    let data: StartResponseData
+    let startTime: String
+}
+
+struct StartResponseData: Decodable {
+    let user: User
+    let event: Event
+    let activity: ActivityData
+    let startLocation: StartLocation?
+}
+
+struct User: Decodable {
+    let id: String
+    let displayName: String
+    let email: String
+    let preferences: UserPreferences
+}
+
+struct UserPreferences: Decodable {
+    let voice: String
+    let cheersVolume: Double
+}
+
+struct Event: Decodable {
+    let id: String
+    let name: String
+    let date: String
+    let location: EventLocation
+    let type: String
+    let distance: Int
+}
+
+struct EventLocation: Decodable {
+    let coordinates: Coordinates
+    let city: String
+    let country: String
+}
+
+struct Coordinates: Decodable {
+    let type: String
+    let coordinates: [Double]
+}
+
+struct ActivityData: Decodable {
+    let id: String
+    let status: String
+    let startedAt: String
+    let share: ShareData
+    let settings: ActivitySettings
+}
+
+struct ShareData: Decodable {
+    let isPublic: Bool
+    let token: String
+    let expiresAt: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case isPublic = "public"
+        case token
+        case expiresAt
+    }
+}
+
+struct ActivitySettings: Decodable {
+    let pingIntervalSec: Int
+    let cheersEnabled: Bool
+    let ttsLang: String
+}
+
+struct StartLocation: Decodable {
+    let lat: Double
+    let lng: Double
+    let accuracy: Double
 }
 
 struct LocationPayload: Codable {
@@ -466,7 +619,7 @@ struct LocationPayload: Codable {
 }
 
 final class NetworkService {
-    private let baseHTTP = URL(string: "http://10.60.3.174:3000")! // Your Mac's IP address
+    private let baseHTTP = URL(string: "http://192.168.1.103:3000")! // Your Mac's current IP address
     private var webSocket: URLSessionWebSocketTask?
     private let session: URLSession
     private let decoder = JSONDecoder()
@@ -556,7 +709,7 @@ final class NetworkService {
     // WebSocket for live cheers: ws://localhost:3000/api/activity/stream?activityId=...
     func openCheerStream(activityId: String) {
         closeCheerStream()
-        guard let wsURL = URL(string: "ws://10.60.3.174:3000/api/activity/stream?activityId=\(activityId)") else { return }
+        guard let wsURL = URL(string: "ws://192.168.1.103:3000/api/activity/stream?activityId=\(activityId)") else { return }
         webSocket = session.webSocketTask(with: wsURL)
         webSocket?.resume()
         listenForMessages()
