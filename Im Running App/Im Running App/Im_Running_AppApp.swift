@@ -3,6 +3,69 @@ import Combine
 import CoreLocation
 import AVFoundation
 import UIKit
+import MapKit
+
+// MARK: - Data Models
+
+struct User: Identifiable, Codable {
+    let id: String
+    let displayName: String
+    let email: String
+    var preferences: UserPreferences
+    
+    struct UserPreferences: Codable {
+        var voice: String
+        var cheersVolume: Double
+        var units: String // "metric" or "imperial"
+    }
+}
+
+struct Activity: Identifiable, Codable {
+    let id: String
+    let runnerId: String
+    let eventId: String
+    var status: String // "planned", "active", "finished", "cancelled"
+    var startedAt: Date?
+    var endedAt: Date?
+    var distance: Double
+    var duration: TimeInterval
+    var averagePace: String
+    var maxHeartRate: Int?
+    var averageHeartRate: Int?
+    
+    var isActive: Bool {
+        status == "active"
+    }
+    
+    var isFinished: Bool {
+        status == "finished"
+    }
+}
+
+struct RunningEvent: Identifiable, Equatable, Codable {
+    let id = UUID()
+    let title: String
+    let date: Date
+    let location: String
+    let latitude: Double?
+    let longitude: Double?
+    let distance: String?
+    let isToday: Bool
+    let eventType: String // "race", "custom", etc.
+    
+    var coordinates: CLLocationCoordinate2D? {
+        guard let lat = latitude, let lon = longitude else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+    
+    static func == (lhs: RunningEvent, rhs: RunningEvent) -> Bool {
+        lhs.id == rhs.id
+    }
+    
+    enum CodingKeys: String, CodingKey {
+        case id, title, date, location, latitude, longitude, distance, isToday, eventType
+    }
+}
 
 // MARK: - App Entry
 
@@ -12,7 +75,7 @@ struct ImRunningLiveApp: App {
     
     var body: some Scene {
         WindowGroup {
-            MainView()
+            MapMainView()
                 .environmentObject(appState)
                 .onAppear {
                     appState.location.requestPermissionsOnLaunch()
@@ -31,6 +94,15 @@ final class AppState: ObservableObject {
     @Published var lastError: String? = nil
     @Published var showLocationWarning = false
     @Published var showSetupForm = true
+    
+    // Additional properties needed by MapMainView
+    @Published var currentUser: User?
+    @Published var selectedEvent: RunningEvent?
+    @Published var currentActivity: Activity?
+    @Published var activityStartTime: Date?
+    @Published var currentDistance: Double = 0.0
+    @Published var currentPace: String = "00:00"
+    @Published var currentHeartRate: Int = 0
     
     let location = LocationService()
     let network = NetworkService()
@@ -239,6 +311,10 @@ struct MainView: View {
     @State private var copied = false
     @State private var runnerIdInput = ""
     @State private var activityIdInput = ""
+    @State private var region = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 37.7749, longitude: -122.4194), // Default to San Francisco
+        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01) // ~1km radius
+    )
     
     private var locationStatusText: String {
         switch app.location.authorizationStatus {
@@ -421,6 +497,11 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
     @Published var authorizationStatus: CLAuthorizationStatus = .notDetermined
     @Published var currentLocation: CLLocation?
     
+    // Additional properties needed by MapMainView
+    var showLocationWarning: Bool {
+        authorizationStatus == .denied || authorizationStatus == .restricted
+    }
+    
     private let manager: CLLocationManager = {
         let m = CLLocationManager()
         m.desiredAccuracy = kCLLocationAccuracyBest
@@ -499,21 +580,7 @@ final class LocationService: NSObject, ObservableObject, CLLocationManagerDelega
 
 // MARK: - Networking
 
-// MARK: - Data Models
-
-struct Runner {
-    let id: String           // Format: "usr_8pG7..."
-    let email: String
-    let displayName: String
-}
-
-struct Activity {
-    let id: String           // Format: "act_7XcQ..."
-    let runnerId: String
-    let status: String       // "planned", "active", "finished"
-    let startedAt: Date?
-    let shareToken: String   // Format: "sh_7LrZ..."
-}
+// MARK: - Network Response Models
 
 struct LocationPing: Codable {
     let latitude: Double
@@ -540,25 +607,25 @@ struct StartResponse: Decodable {
 }
 
 struct StartResponseData: Decodable {
-    let user: User
-    let event: Event
-    let activity: ActivityData
+    let user: NetworkUser
+    let event: NetworkEvent
+    let activity: NetworkActivityData
     let startLocation: StartLocation?
 }
 
-struct User: Decodable {
+struct NetworkUser: Decodable {
     let id: String
     let displayName: String
     let email: String
-    let preferences: UserPreferences
+    let preferences: NetworkUserPreferences
 }
 
-struct UserPreferences: Decodable {
+struct NetworkUserPreferences: Decodable {
     let voice: String
     let cheersVolume: Double
 }
 
-struct Event: Decodable {
+struct NetworkEvent: Decodable {
     let id: String
     let name: String
     let date: String
@@ -578,7 +645,7 @@ struct Coordinates: Decodable {
     let coordinates: [Double]
 }
 
-struct ActivityData: Decodable {
+struct NetworkActivityData: Decodable {
     let id: String
     let status: String
     let startedAt: String
@@ -619,7 +686,7 @@ struct LocationPayload: Codable {
 }
 
 final class NetworkService {
-    private let baseHTTP = URL(string: "http://192.168.1.103:3000")! // Your Mac's current IP address
+    private let baseHTTP = URL(string: "http://192.168.1.108:3000")! // Your Mac's current IP address
     private var webSocket: URLSessionWebSocketTask?
     private let session: URLSession
     private let decoder = JSONDecoder()
@@ -635,7 +702,7 @@ final class NetworkService {
     }
     
     // POST /api/runner/{runnerId}/activity/{activityId}/start
-    func startActivity(runnerId: String, activityId: String, latitude: Double, longitude: Double) async throws -> StartResponse {
+    func startActivity(runnerId: String, activityId: String, latitude: Double, longitude: Double, eventName: String? = nil, eventType: String? = nil) async throws -> StartResponse {
         let url = baseHTTP.appendingPathComponent("/api/runner/\(runnerId)/activity/\(activityId)/start")
         print("🌐 NetworkService: Making request to URL: \(url)")
         print("🌐 NetworkService: Base HTTP: \(baseHTTP)")
@@ -646,18 +713,46 @@ final class NetworkService {
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        let body = [
+        var body: [String: Any] = [
             "latitude": latitude,
             "longitude": longitude
         ]
+        
+        // Add event information if provided
+        if let eventName = eventName {
+            body["eventName"] = eventName
+        }
+        if let eventType = eventType {
+            body["eventType"] = eventType
+        }
+        
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
         
         print("🌐 NetworkService: Request body: \(body)")
         
         let (data, resp) = try await session.data(for: req)
         print("🌐 NetworkService: Response received: \(resp)")
+        
+        // Log the raw response data
+        if let responseString = String(data: data, encoding: .utf8) {
+            print("🌐 NetworkService: Raw response data: \(responseString)")
+        }
+        
         try Self.ensureOK(resp)
-        return try decoder.decode(StartResponse.self, from: data)
+        
+        // Try to decode and log the response
+        do {
+            let response = try decoder.decode(StartResponse.self, from: data)
+            print("🌐 NetworkService: Successfully decoded response:")
+            print("   - Success: \(response.success)")
+            print("   - Message: \(response.message)")
+            print("   - Activity ID: \(response.data.activity.id)")
+            return response
+        } catch {
+            print("❌ NetworkService: Failed to decode response: \(error)")
+            print("❌ NetworkService: Decoding error details: \(error)")
+            throw error
+        }
     }
     
     // POST /api/runner/{runnerId}/activity/{activityId}/stop
@@ -706,10 +801,29 @@ final class NetworkService {
         try Self.ensureOK(resp)
     }
     
+    // POST /api/runner/{runnerId}/activity/{activityId}/location (simplified version for development)
+    func updateLocation(runnerId: String, activityId: String, latitude: Double, longitude: Double, distance: Double) async throws {
+        let url = baseHTTP.appendingPathComponent("/api/runner/\(runnerId)/activity/\(activityId)/location")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = [
+            "lat": latitude,
+            "lng": longitude,
+            "distance": distance
+        ]
+        
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        
+        let (_, resp) = try await session.data(for: req)
+        try Self.ensureOK(resp)
+    }
+    
     // WebSocket for live cheers: ws://localhost:3000/api/activity/stream?activityId=...
     func openCheerStream(activityId: String) {
         closeCheerStream()
-        guard let wsURL = URL(string: "ws://192.168.1.103:3000/api/activity/stream?activityId=\(activityId)") else { return }
+        guard let wsURL = URL(string: "ws://192.168.1.108:3000/api/activity/stream?activityId=\(activityId)") else { return }
         webSocket = session.webSocketTask(with: wsURL)
         webSocket?.resume()
         listenForMessages()
