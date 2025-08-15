@@ -686,7 +686,13 @@ struct LocationPayload: Codable {
 }
 
 final class NetworkService {
-    private let baseHTTP = URL(string: "http://192.168.1.108:3000")! // Your Mac's current IP address
+    private var baseHTTP: URL {
+        #if DEBUG
+        return URL(string: "http://192.168.1.108:3000")! // Development server
+        #else
+        return URL(string: "https://imrunning.live")! // Production server
+        #endif
+    }
     private var webSocket: URLSessionWebSocketTask?
     private let session: URLSession
     private let decoder = JSONDecoder()
@@ -696,9 +702,20 @@ final class NetworkService {
     
     init() {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 15
-        config.timeoutIntervalForResource = 30
+        #if DEBUG
+        config.timeoutIntervalForRequest = 15.0
+        config.timeoutIntervalForResource = 30.0
+        #else
+        config.timeoutIntervalForRequest = 30.0
+        config.timeoutIntervalForResource = 60.0
+        #endif
         self.session = URLSession(configuration: config)
+        
+        // Print configuration for debugging
+        print("🔧 NetworkService Configuration:")
+        print("   Base URL: \(baseHTTP)")
+        print("   Timeout: \(config.timeoutIntervalForRequest)s")
+        print("   Resource Timeout: \(config.timeoutIntervalForResource)s")
     }
     
     // POST /api/runner/{runnerId}/activity/{activityId}/start
@@ -820,10 +837,16 @@ final class NetworkService {
         try Self.ensureOK(resp)
     }
     
-    // WebSocket for live cheers: ws://localhost:3000/api/activity/stream?activityId=...
+    // WebSocket for live cheers
     func openCheerStream(activityId: String) {
         closeCheerStream()
-        guard let wsURL = URL(string: "ws://192.168.1.108:3000/api/activity/stream?activityId=\(activityId)") else { return }
+        #if DEBUG
+        let wsURLString = "ws://192.168.1.108:3000/api/activity/stream?activityId=\(activityId)"
+        #else
+        let wsURLString = "wss://imrunning.live/api/activity/stream?activityId=\(activityId)"
+        #endif
+        
+        guard let wsURL = URL(string: wsURLString) else { return }
         webSocket = session.webSocketTask(with: wsURL)
         webSocket?.resume()
         listenForMessages()
